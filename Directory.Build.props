@@ -36,6 +36,7 @@
         CS1701 and CS1702 are by default ignored by Microsoft.NET.Sdk, but if you define the NoWarn property in Directory.Build.props,
         you don't get those defaults.
         SYSLIB0011: Removing binary formatter will happen as part of a larger .NET-wide effort.
+        NETSDK1182: For 17.0 servicing, continue using what was the LKG toolset at the time to build
     -->
 
     <NoWarn>$(NoWarn);NU1603;NU5105;1701;1702;SYSLIB0011</NoWarn>
@@ -76,5 +77,5 @@
   <PropertyGroup>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
   </PropertyGroup>
-  
+
 </Project>
