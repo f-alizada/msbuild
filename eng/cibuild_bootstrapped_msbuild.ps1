@@ -100,7 +100,7 @@ try {
   if ($msbuildEngine -ne 'vs')
   {
     $buildToolPath = $dotnetExePath
-    $buildToolCommand = Join-Path $bootstrapRoot "net6.0\MSBuild\MSBuild.dll"
+    $buildToolCommand = Join-Path $bootstrapRoot "net7.0\MSBuild\MSBuild.dll"
     $buildToolFramework = "netcoreapp3.1"
     # Use separate artifacts folder for stage 2
     # $env:ArtifactsDir = Join-Path $ArtifactsDir "2\"

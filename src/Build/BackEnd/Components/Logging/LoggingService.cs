@@ -8,7 +8,6 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Shared;
 using InternalLoggerException = Microsoft.Build.Exceptions.InternalLoggerException;
@@ -245,15 +244,15 @@ namespace Microsoft.Build.BackEnd.Logging
         /// <summary>
         /// Event set when message is consumed from queue.
         /// </summary>
-        private ManualResetEventSlim _dequeueEvent;
+        private AutoResetEvent _dequeueEvent;
         /// <summary>
         /// Event set when queue become empty.
         /// </summary>
-        private ManualResetEventSlim _emptyQueueEvent;
+        private ManualResetEvent _emptyQueueEvent;
         /// <summary>
         /// Even set when message is added into queue.
         /// </summary>
-        private ManualResetEventSlim _enqueueEvent;
+        private AutoResetEvent _enqueueEvent;
 
         /// <summary>
         /// CTS for stopping logging event processing.
@@ -1185,8 +1184,7 @@ namespace Microsoft.Build.BackEnd.Logging
                 while (_eventQueue.Count >= _queueCapacity)
                 {
                     // Block and wait for dequeue event.
-                    _dequeueEvent.Wait();
-                    _dequeueEvent.Reset();
+                    _dequeueEvent.WaitOne();
                 }
 
                 _eventQueue.Enqueue(buildEvent);
@@ -1211,12 +1209,12 @@ namespace Microsoft.Build.BackEnd.Logging
         {
             while (_eventQueue?.IsEmpty == false)
             {
-                _emptyQueueEvent?.Wait();
+                _emptyQueueEvent?.WaitOne();
             }
             // To avoid race condition when last message has been removed from queue but
             //   not yet fully processed (handled by loggers), we need to make sure _emptyQueueEvent
             //   is set as it is guaranteed to be in set state no sooner than after event has been processed.
-            _emptyQueueEvent?.Wait();
+            _emptyQueueEvent?.WaitOne();
         }
 
         /// <summary>
@@ -1265,9 +1263,9 @@ namespace Microsoft.Build.BackEnd.Logging
         private void StartLoggingEventProcessing()
         {
             _eventQueue = new ConcurrentQueue<object>();
-            _dequeueEvent = new ManualResetEventSlim(false);
-            _emptyQueueEvent = new ManualResetEventSlim(false);
-            _enqueueEvent = new ManualResetEventSlim(false);
+            _dequeueEvent = new AutoResetEvent(false);
+            _emptyQueueEvent = new ManualResetEvent(false);
+            _enqueueEvent = new AutoResetEvent(false);
             _loggingEventProcessingCancellation = new CancellationTokenSource();
 
             _loggingEventProcessingThread = new Thread(LoggingEventProc);
@@ -1278,7 +1276,7 @@ namespace Microsoft.Build.BackEnd.Logging
             void LoggingEventProc()
             {
                 var completeAdding = _loggingEventProcessingCancellation.Token;
-                WaitHandle[] waitHandlesForNextEvent = { completeAdding.WaitHandle, _enqueueEvent.WaitHandle };
+                WaitHandle[] waitHandlesForNextEvent = { completeAdding.WaitHandle, _enqueueEvent };
 
                 do
                 {
@@ -1297,7 +1295,6 @@ namespace Microsoft.Build.BackEnd.Logging
                             WaitHandle.WaitAny(waitHandlesForNextEvent);
                         }
 
-                        _enqueueEvent.Reset();
                         _emptyQueueEvent.Reset();
                     }
                 } while (!_eventQueue.IsEmpty || !completeAdding.IsCancellationRequested);
@@ -1432,17 +1429,8 @@ namespace Microsoft.Build.BackEnd.Logging
         /// </summary>
         private void RouteBuildEvent(object loggingEvent)
         {
-            BuildEventArgs buildEventArgs = null;
-
-            if (loggingEvent is BuildEventArgs bea)
-            {
-                buildEventArgs = bea;
-            }
-            else if (loggingEvent is KeyValuePair<int, BuildEventArgs> kvp)
-            {
-                buildEventArgs = kvp.Value;
-            }
-            else
+            BuildEventArgs buildEventArgs = loggingEvent as BuildEventArgs ?? (loggingEvent as KeyValuePair<int, BuildEventArgs>?)?.Value;
+            if (buildEventArgs is null)
             {
                 ErrorUtilities.ThrowInternalError("Unknown logging item in queue:" + loggingEvent.GetType().FullName);
             }
@@ -1541,7 +1529,7 @@ namespace Microsoft.Build.BackEnd.Logging
             TryRaiseProjectStartedEvent(eventArg);
 
             // The event has not been through a filter yet. All events must go through a filter before they make it to a logger
-            if (_filterEventSource != null)   // Loggers may not be registered
+            if (_filterEventSource != null) // Loggers may not be registered
             {
                 // Send the event to the filter, the Consume will not return until all of the loggers which have registered to the event have process
                 // them.
@@ -1562,7 +1550,7 @@ namespace Microsoft.Build.BackEnd.Logging
                         {
                             if (!sink.HaveLoggedBuildStartedEvent)
                             {
-                                sink.Consume(eventArg, (int)pair.Key);
+                                sink.Consume(eventArg, pair.Key);
                             }
 
                             // Reset the HaveLoggedBuildStarted event because no one else will be sending a build started event to any loggers at this time.
