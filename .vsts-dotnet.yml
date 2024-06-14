@@ -23,10 +23,10 @@ variables:
   - name: SourceBranch
     value: $(IbcSourceBranchName)
   # If we're not on a vs* branch, use main as our optprof collection branch
-  # NOTE: the code is temporarily fixed. For the branches that should use opt-prof from the main branch we should use the latest working Opt-Prof 20220901.6-001 collected from main 20220901.6.
+  # NOTE: the code is temporarily fixed. For the branches that should use opt-prof from the main branch we should use the latest working Opt-Prof collected from main 20230217.4.
   - ${{ if not(startsWith(variables['Build.SourceBranch'], 'refs/heads/vs')) }}:
     - name: OptProfDrop
-      value: 'OptimizationData/DotNet-msbuild-Trusted/main/20220901.6/1387996/1'
+      value: 'OptimizationData/DotNet-msbuild-Trusted/main/20230217.4/7352286/1'   
     - name: SourceBranch
       value: ''
   # if OptProfDropName is set as a parameter, set OptProfDrop to the parameter and unset SourceBranch
@@ -41,6 +41,9 @@ variables:
     value: .NETCoreValidation
   - name: EnableReleaseOneLocBuild
     value: false
+  - name: Codeql.Enabled
+    value: true
+  - group: DotNet-MSBuild-SDLValidation-Params
 
 resources:
   repositories:
@@ -48,33 +51,11 @@ resources:
     type: git
     name: 1ESPipelineTemplates/1ESPipelineTemplates
 
-  jobs:
-  - ${{ if and( ne(variables['System.TeamProject'], 'public'), notin(variables['Build.Reason'], 'PullRequest')) }}:
-    # The localization setup for release/ branches. Note difference in LclPackageId. main branch is handled separately below.
-    # Used for vs17.2, vs17.4, vs17.6 etc. branches only.
-    # When the branch is setup for localization (the localization ticket needs to be created - https://aka.ms/ceChangeLocConfig, requesting change from one release branch to another),
-    #  set 'EnableReleaseOneLocBuild' to true.
-    - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/vs') }}:
-      - template: /eng/common/templates/job/onelocbuild.yml
-        parameters:
-          MirrorRepo: 'msbuild'
-          LclSource: lclFilesfromPackage
-          LclPackageId: 'LCL-JUNO-PROD-MSBUILDREL'
-          MirrorBranch: ${{ replace(variables['Build.SourceBranch'], 'refs/heads/', '') }}
-          JobNameSuffix: '_release'
-          condition: ${{ variables.EnableReleaseOneLocBuild }}
-    # The localization setup for main branch. Note difference in package ID. Should not be used with release/ branches.
-    - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
-      - template: /eng/common/templates/job/onelocbuild.yml
-        parameters:
-          MirrorRepo: 'msbuild'
-          LclSource: lclFilesfromPackage
-          LclPackageId: 'LCL-JUNO-PROD-MSBUILD'
-          MirrorBranch: 'main'
-          JobNameSuffix: '_main'
-          condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
-
-  - job: Windows_NT
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    featureFlags:
+      autoBaseline: true
     pool:
       name: VSEngSS-MicroBuild2022-1ES
       os: windows
@@ -83,73 +64,8 @@ resources:
       sbom:
         enabled: false
 
-    timeoutInMinutes: 180
-
-    variables:
-    - group: DotNet-Blob-Feed
-    - group: DotNet-Symbol-Publish
-    - group: Publish-Build-Assets
-    - name: TeamName
-      value: MSBuild
-    - name: VisualStudio.MajorVersion
-      value: 17
-    - name: VisualStudio.ChannelName
-      value: 'int.d17.4'
-    - name: VisualStudio.DropName
-      value: Products/$(System.TeamProject)/$(Build.Repository.Name)/$(Build.SourceBranchName)/$(Build.BuildNumber)
-
-    steps:
-    - task: NuGetToolInstaller@0
-      inputs:
-        versionSpec: '4.9.2'
-
-    - task: NuGetCommand@2
-      displayName: Restore internal tools
-      inputs:
-        command: restore
-        feedsToUse: config
-        restoreSolution: 'eng\common\internal\Tools.csproj'
-        nugetConfigPath: 'NuGet.config'
-        restoreDirectory: '$(Build.SourcesDirectory)\.packages'
-
-    - task: ms-vseng.MicroBuildTasks.30666190-6959-11e5-9f96-f56098202fef.MicroBuildSigningPlugin@1
-      inputs:
-        signType: $(SignType)
-        zipSources: false
-      condition: and(succeeded(), in(variables['SignType'], 'test', 'real'))
-
-    - task: MicroBuildOptProfPlugin@6
-      inputs:
-        ProfilingInputsDropName: '$(VisualStudio.DropName)'
-        ShouldSkipOptimize: true
-        AccessToken: '$(System.AccessToken)'
-        feedSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'
-      displayName: 'Install OptProf Plugin'
-
-    # Required by MicroBuildBuildVSBootstrapper
-    - task: MicroBuildSwixPlugin@4
-      inputs:
-        dropName: $(VisualStudio.DropName)
-
-    - script: eng/CIBuild.cmd
-                -configuration $(BuildConfiguration)
-                -officialBuildId $(Build.BuildNumber)
-                -officialSkipApplyOptimizationData $(SkipApplyOptimizationData)
-                /p:RepositoryName=$(Build.Repository.Name)
-                /p:VisualStudioIbcSourceBranchName=$(SourceBranch)
-                /p:VisualStudioDropAccessToken=$(System.AccessToken)
-                /p:VisualStudioDropName=$(VisualStudio.DropName)
-                /p:DotNetSignType=$(SignType)
-                /p:DotNetPublishToBlobFeed=true
-                /p:DotNetPublishBlobFeedKey=$(dotnetfeed-storage-access-key-1)
-                /p:DotNetPublishBlobFeedUrl=https://dotnetfeed.blob.core.windows.net/dotnet-core/index.json
-                /p:PublishToSymbolServer=true
-                /p:DotNetSymbolServerTokenMsdl=$(microsoft-symbol-server-pat)
-                /p:DotNetSymbolServerTokenSymWeb=$(symweb-symbol-server-pat)
-                /p:TeamName=MSBuild
-                /p:DotNetPublishUsingPipelines=true
-                /p:VisualStudioIbcDrop=$(OptProfDrop)
-                /p:GenerateSbom=true
+    stages:
+    - stage: build
       displayName: Build
 
       jobs:
@@ -183,17 +99,7 @@ resources:
           demands:
           - agent.os -equals Windows_NT
 
-    # Build VS bootstrapper
-    # Generates $(Build.StagingDirectory)\MicroBuild\Output\BootstrapperInfo.json
-    - task: MicroBuildBuildVSBootstrapper@3
-      inputs:
-        vsMajorVersion: $(VisualStudio.MajorVersion)
-        channelName: $(VisualStudio.ChannelName)
-        manifests: $(VisualStudio.SetupManifestList)
-        outputFolder: '$(Build.SourcesDirectory)\artifacts\VSSetup\$(BuildConfiguration)\Insertion'
-        bootstrapperCoreVersion:
-      displayName: 'OptProf - Build VS bootstrapper'
-      condition: succeeded()
+        timeoutInMinutes: 180
 
         variables:
         - group: DotNet-Blob-Feed
@@ -204,7 +110,7 @@ resources:
         - name: VisualStudio.MajorVersion
           value: 17
         - name: VisualStudio.ChannelName
-          value: 'int.d17.3'
+          value: 'int.d17.6'
         - name: VisualStudio.DropName
           value: Products/$(System.TeamProject)/$(Build.Repository.Name)/$(Build.SourceBranchName)/$(Build.BuildNumber)
 
@@ -227,14 +133,13 @@ resources:
             zipSources: false
           condition: and(succeeded(), in(variables['SignType'], 'test', 'real'))
 
-        # OptProf is not needed because 17.3 will not be serviced in VS.
-        # - task: MicroBuildOptProfPlugin@6
-        #   inputs:
-        #     ProfilingInputsDropName: '$(VisualStudio.DropName)'
-        #     ShouldSkipOptimize: true
-        #     AccessToken: '$(System.AccessToken)'
-        #     feedSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'
-        #   displayName: 'Install OptProf Plugin'
+        - task: MicroBuildOptProfPlugin@6
+          inputs:
+            ProfilingInputsDropName: '$(VisualStudio.DropName)'
+            ShouldSkipOptimize: true
+            AccessToken: '$(System.AccessToken)'
+            feedSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'
+          displayName: 'Install OptProf Plugin'
 
         # Required by MicroBuildBuildVSBootstrapper
         - task: MicroBuildSwixPlugin@4
@@ -266,49 +171,49 @@ resources:
         # Required by Microsoft policy
         - template: eng\common\templates-official\steps\generate-sbom.yml@self
 
-        # OptProf is not needed because 17.3 will not be serviced in VS.
         # Publish OptProf configuration files
-        # - task: 1ES.PublishArtifactsDrop@1
-        #   inputs:
-        #     dropServiceURI: 'https://devdiv.artifacts.visualstudio.com'
-        #     buildNumber: 'ProfilingInputs/DevDiv/$(Build.Repository.Name)/$(Build.SourceBranchName)/$(Build.BuildNumber)'
-        #     sourcePath: '$(Build.SourcesDirectory)\artifacts\OptProf\$(BuildConfiguration)\Data'
-        #     toLowerCase: false
-        #     usePat: true
-        #   displayName: 'OptProf - Publish to Artifact Services - ProfilingInputs'
-        #   condition: succeeded()
+        - task: 1ES.PublishArtifactsDrop@1
+          inputs:
+            dropServiceURI: 'https://devdiv.artifacts.visualstudio.com'
+            buildNumber: 'ProfilingInputs/DevDiv/$(Build.Repository.Name)/$(Build.SourceBranchName)/$(Build.BuildNumber)'
+            sourcePath: '$(Build.SourcesDirectory)\artifacts\OptProf\$(BuildConfiguration)\Data'
+            toLowerCase: false
+            usePat: true
+          displayName: 'OptProf - Publish to Artifact Services - ProfilingInputs'
+          condition: succeeded()
 
         # Build VS bootstrapper
         # Generates $(Build.StagingDirectory)\MicroBuild\Output\BootstrapperInfo.json
-        # - task: MicroBuildBuildVSBootstrapper@3
-        #   inputs:
-        #     vsMajorVersion: $(VisualStudio.MajorVersion)
-        #     channelName: $(VisualStudio.ChannelName)
-        #     manifests: $(VisualStudio.SetupManifestList)
-        #     outputFolder: '$(Build.SourcesDirectory)\artifacts\VSSetup\$(BuildConfiguration)\Insertion'
-        #     bootstrapperCoreVersion:
-        #   displayName: 'OptProf - Build VS bootstrapper'
-        #   condition: succeeded()
+        - task: MicroBuildBuildVSBootstrapper@3
+          inputs:
+            vsMajorVersion: $(VisualStudio.MajorVersion)
+            channelName: $(VisualStudio.ChannelName)
+            manifests: $(VisualStudio.SetupManifestList)
+            outputFolder: '$(Build.SourcesDirectory)\artifacts\VSSetup\$(BuildConfiguration)\Insertion'
+            bootstrapperCoreVersion:
+          displayName: 'OptProf - Build VS bootstrapper'
+          condition: succeeded()
 
-    - task: ms-vseng.MicroBuildTasks.521a94ea-9e68-468a-8167-6dcf361ea776.MicroBuildCleanup@1
-      displayName: Execute cleanup tasks
-      condition: succeededOrFailed()
-      
-    - template: /eng/common/templates/steps/component-governance.yml
-      parameters:
-        ${{ if and(ne(variables['System.TeamProject'], 'public'), notin(variables['Build.Reason'], 'PullRequest'), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/vs'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))) }}:
-          disableComponentGovernance: false
-        ${{ else }}:
-          disableComponentGovernance: true
+        # Publish run settings
+        - task: PowerShell@2
+          inputs:
+            filePath: eng\common\sdk-task.ps1
+            arguments: -configuration $(BuildConfiguration)
+                      -task VisualStudio.BuildIbcTrainingSettings
+                      /p:VisualStudioDropName=$(VisualStudio.DropName)
+                      /p:BootstrapperInfoPath=$(Build.StagingDirectory)\MicroBuild\Output\BootstrapperInfo.json
+                      /p:VisualStudioIbcTrainingSettingsPath=$(Build.SourcesDirectory)\eng\config\OptProf.runsettings
+          displayName: 'OptProf - Build IBC training settings'
+          condition: succeeded()
 
         # Publish bootstrapper info
-        # - task: 1ES.PublishBuildArtifacts@1
-        #   inputs:
-        #     PathtoPublish: $(Build.StagingDirectory)\MicroBuild\Output
-        #     ArtifactName: MicroBuildOutputs
-        #     ArtifactType: Container
-        #   displayName: 'OptProf - Publish Artifact: MicroBuildOutputs'
-        #   condition: succeeded()
+        - task: 1ES.PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: $(Build.StagingDirectory)\MicroBuild\Output
+            ArtifactName: MicroBuildOutputs
+            ArtifactType: Container
+          displayName: 'OptProf - Publish Artifact: MicroBuildOutputs'
+          condition: succeeded()
 
         - task: 1ES.PublishBuildArtifacts@1
           displayName: 'Publish Artifact: logs'
