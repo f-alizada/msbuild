@@ -1,0 +1,13 @@
+name: Usage of Inter-branch merge workflow
+on: push
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-script:
+    uses: dotnet/arcade/.github/workflows/inter-branch-merge-base.yml@main
+    with:
+      configuration_file_branch: 'configuration-file-branch'
+      configuration_file_path: '.config/git-merge-flow-config.json'
