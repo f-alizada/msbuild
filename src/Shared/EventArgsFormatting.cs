@@ -7,6 +7,8 @@ using System.Text;
 
 using Microsoft.Build.Framework;
 
+#nullable disable
+
 namespace Microsoft.Build.Shared
 {
     /// <summary>
@@ -217,7 +219,9 @@ namespace Microsoft.Build.Shared
             string logOutputProperties
         )
         {
-            StringBuilder format = new StringBuilder();
+            // capacity is the longest possible path through the below
+            // to avoid reallocating while constructing the string
+            using ReuseableStringBuilder format = new(51);
 
             // Uncomment these lines to show show the processor, if present.
             /*
@@ -306,15 +310,30 @@ namespace Microsoft.Build.Shared
 
             // If the project file was specified, tack that onto the very end.
             // Check for additional properties that should be output with project file
-            if (projectFile != null && !String.Equals(projectFile, file))
+            if (projectFile != null)
             {
-                if (logOutputProperties?.Length > 0)
+                // If the project file was specified, tack that onto the very end.
+                if (!string.Equals(projectFile, file))
                 {
-                    format.Append(" [{10}::{11}]");
+                    // Check for additional properties that should be output with project file
+                    if (logOutputProperties?.Length > 0)
+                    {
+                        format.Append(" [{10}::{11}]");
+                    }
+                    else
+                    {
+                        format.Append(" [{10}]");
+                    }
                 }
                 else
                 {
-                    format.Append(" [{10}]");
+                    // If the file location of the error _was_ the project file, append only the
+                    // additional output properties
+
+                    if (logOutputProperties?.Length > 0)
+                    {
+                        format.Append(" [{11}]");
+                    }
                 }
             }
 
@@ -326,9 +345,11 @@ namespace Microsoft.Build.Shared
 
             string finalFormat = format.ToString();
 
+            // Reuse the string builder to create the final message
+            ReuseableStringBuilder formattedMessage = format.Clear();
+
             // If there are multiple lines, show each line as a separate message.
             string[] lines = SplitStringOnNewLines(message);
-            StringBuilder formattedMessage = new StringBuilder();
 
             for (int i = 0; i < lines.Length; i++)
             {

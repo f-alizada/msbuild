@@ -3,10 +3,14 @@
 
 using System;
 using System.Collections.Generic;
+#if FEATURE_APARTMENT_STATE
 using System.Diagnostics.CodeAnalysis;
+#endif
 using System.Linq;
 using System.Reflection;
+#if FEATURE_APARTMENT_STATE
 using System.Runtime.ExceptionServices;
+#endif
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Build.Collections;
@@ -22,6 +26,8 @@ using ProjectItemInstanceFactory = Microsoft.Build.Execution.ProjectItemInstance
 using ReservedPropertyNames = Microsoft.Build.Internal.ReservedPropertyNames;
 using TargetLoggingContext = Microsoft.Build.BackEnd.Logging.TargetLoggingContext;
 using TaskLoggingContext = Microsoft.Build.BackEnd.Logging.TaskLoggingContext;
+
+#nullable disable
 
 namespace Microsoft.Build.BackEnd
 {
@@ -393,8 +399,19 @@ namespace Microsoft.Build.BackEnd
             // If this is an Intrinsic task, it gets handled in a special fashion.
             if (_taskNode == null)
             {
-                ExecuteIntrinsicTask(bucket);
-                taskResult = new WorkUnitResult(WorkUnitResultCode.Success, WorkUnitActionCode.Continue, null);
+                try
+                {
+                    ExecuteIntrinsicTask(bucket);
+                    taskResult = new WorkUnitResult(WorkUnitResultCode.Success, WorkUnitActionCode.Continue, null);
+                }
+                catch (InvalidProjectFileException e)
+                {
+                    // Make sure the Invalid Project error gets logged *before* TaskFinished.  Otherwise,
+                    // the log is confusing.
+                    _targetLoggingContext.LogInvalidProjectFileError(e);
+                    _continueOnError = ContinueOnError.ErrorAndStop;
+                    taskResult = new WorkUnitResult(WorkUnitResultCode.Failed, WorkUnitActionCode.Stop, e);
+                }
             }
             else
             {
@@ -455,6 +472,7 @@ namespace Microsoft.Build.BackEnd
                             // the log is confusing.
                             taskLoggingContext.LogInvalidProjectFileError(e);
                             _continueOnError = ContinueOnError.ErrorAndStop;
+                            taskResult = new WorkUnitResult(WorkUnitResultCode.Failed, WorkUnitActionCode.Stop, e);
                         }
                         finally
                         {
@@ -709,7 +727,7 @@ namespace Microsoft.Build.BackEnd
                 catch (ArgumentException e)
                 {
                     // handle errors in string-->bool conversion
-                    ProjectErrorUtilities.VerifyThrowInvalidProject(false, _taskNode.ContinueOnErrorLocation, "InvalidContinueOnErrorAttribute", _taskNode.Name, e.Message);
+                    ProjectErrorUtilities.ThrowInvalidProject(_taskNode.ContinueOnErrorLocation, "InvalidContinueOnErrorAttribute", _taskNode.Name, e.Message);
                 }
             }
 
@@ -740,7 +758,7 @@ namespace Microsoft.Build.BackEnd
             if (!taskExecutionHost.SetTaskParameters(_taskNode.ParametersForBuild))
             {
                 // The task cannot be initialized.
-                ProjectErrorUtilities.VerifyThrowInvalidProject(false, _targetChildInstance.Location, "TaskParametersError", _taskNode.Name, String.Empty);
+                ProjectErrorUtilities.ThrowInvalidProject(_targetChildInstance.Location, "TaskParametersError", _taskNode.Name, String.Empty);
             }
             else
             {
@@ -938,8 +956,14 @@ namespace Microsoft.Build.BackEnd
                 // that is logged as an error. MSBuild tasks are an exception because
                 // errors are not logged directly from them, but the tasks spawned by them.
                 IBuildEngine be = host.TaskInstance.BuildEngine;
-                if (taskReturned && !taskResult && !taskLoggingContext.HasLoggedErrors && (be is TaskHost th ? th.BuildRequestsSucceeded : false) && (be is IBuildEngine7 be7 ? !be7.AllowFailureWithoutError : true))
+                if (taskReturned // if the task returned
+                    && !taskResult // and it returned false
+                    && !taskLoggingContext.HasLoggedErrors // and it didn't log any errors
+                    && (be is TaskHost th ? th.BuildRequestsSucceeded : false)
+                    && (be is IBuildEngine7 be7 ? !be7.AllowFailureWithoutError : true) // and it's not allowed to fail unless it logs an error
+                    && !(_cancellationToken.CanBeCanceled && _cancellationToken.IsCancellationRequested)) // and it wasn't cancelled
                 {
+                    // Then decide how to log MSB4181
                     if (_continueOnError == ContinueOnError.WarnAndContinue)
                     {
                         taskLoggingContext.LogWarning(null,

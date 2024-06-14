@@ -1,16 +1,36 @@
 ﻿using System.Diagnostics.Tracing;
 
+#nullable disable
+
 namespace Microsoft.Build.Eventing
 {
     /// <summary>
     /// This captures information of how various key methods of building with MSBuild ran.
     /// </summary>
+    /// <remarks>
+    /// Changes to existing event method signatures will not be reflected unless you update the <see cref="EventAttribute.Version" /> property or assign a new event ID.
+    /// </remarks>
     [EventSource(Name = "Microsoft-Build")]
     internal sealed class MSBuildEventSource : EventSource
     {
         public static class Keywords
         {
+            /// <summary>
+            /// Keyword applied to all MSBuild events.
+            /// </summary>
+            /// <remarks>
+            /// Literally every event should define this.
+            /// </remarks>
             public const EventKeywords All = (EventKeywords)0x1;
+
+            /// <summary>
+            /// Keyword for events that should go in the text performance log when turned on.
+            /// </summary>
+            /// <remarks>
+            /// This keyword should be applied only to events that are low-volume
+            /// and likely to be useful to diagnose perf issues using the
+            /// <see href="https://github.com/dotnet/msbuild/pull/5861">text perf log</see>.
+            /// </remarks>
             public const EventKeywords PerformanceLog = (EventKeywords)0x2;
         }
 
@@ -429,7 +449,7 @@ namespace Microsoft.Build.Eventing
         {
             WriteEvent(57, result);
         }
-        
+
         [Event(58, Keywords = Keywords.All)]
         public void CopyUpToDateStart(string path)
         {
@@ -452,6 +472,179 @@ namespace Microsoft.Build.Eventing
         public void WriteLinesToFileUpToDateStop(string fileItemSpec, bool wasUpToDate)
         {
             WriteEvent(61, fileItemSpec, wasUpToDate);
+        }
+
+        [Event(62, Keywords = Keywords.All)]
+        public void SdkResolverServiceInitializeStart()
+        {
+            WriteEvent(62);
+        }
+
+        [Event(63, Keywords = Keywords.All)]
+        public void SdkResolverServiceInitializeStop(int resolverCount)
+        {
+            WriteEvent(63, resolverCount);
+        }
+
+        [Event(64, Keywords = Keywords.All)]
+        public void SdkResolverResolveSdkStart()
+        {
+            WriteEvent(64);
+        }
+
+        [Event(65, Keywords = Keywords.All)]
+        public void SdkResolverResolveSdkStop(string resolverName, string sdkName, string solutionPath, string projectPath, string sdkPath, bool success)
+        {
+            WriteEvent(65, resolverName, sdkName, solutionPath, projectPath, sdkPath, success);
+        }
+
+        [Event(66, Keywords = Keywords.All)]
+        public void CachedSdkResolverServiceResolveSdkStart(string sdkName, string solutionPath, string projectPath)
+        {
+            WriteEvent(66, sdkName, solutionPath, projectPath);
+        }
+
+        [Event(67, Keywords = Keywords.All, Version = 2)]
+        public void CachedSdkResolverServiceResolveSdkStop(string sdkName, string solutionPath, string projectPath, bool success, bool wasResultCached)
+        {
+            WriteEvent(67, sdkName, solutionPath, projectPath, success, wasResultCached);
+        }
+
+        /// <remarks>
+        /// This events are quite frequent so they are collected by Debug binaries only.
+        /// </remarks>
+        [Event(68, Keywords = Keywords.All)]
+        public void ReusableStringBuilderFactoryStart(int hash, int newCapacity, int oldCapacity, string type)
+        {
+            WriteEvent(68, hash, newCapacity, oldCapacity, type);
+        }
+
+        /// <remarks>
+        /// This events are quite frequent so they are collected by Debug binaries only.
+        /// </remarks>
+        [Event(69, Keywords = Keywords.All)]
+        public void ReusableStringBuilderFactoryStop(int hash, int returningCapacity, int returningLength, string type)
+        {
+            WriteEvent(69, hash, returningCapacity, returningLength, type);
+        }
+
+        /// <remarks>
+        /// As oppose to other ReusableStringBuilderFactory events this one is expected to happens very un-frequently
+        ///    and if it is seen more than 100x per build it might indicates wrong usage patterns resulting into degrading
+        ///    efficiency of ReusableStringBuilderFactory. Hence it is collected in release build as well.
+        /// </remarks>
+        [Event(70, Keywords = Keywords.All)]
+        public void ReusableStringBuilderFactoryUnbalanced(int oldHash, int newHash)
+        {
+            WriteEvent(70, oldHash, newHash);
+        }
+
+        [Event(71, Keywords = Keywords.All)]
+        public void ProjectCacheCreatePluginInstanceStart(string pluginAssemblyPath)
+        {
+            WriteEvent(71, pluginAssemblyPath);
+        }
+
+        [Event(72, Keywords = Keywords.All)]
+        public void ProjectCacheCreatePluginInstanceStop(string pluginAssemblyPath, string pluginTypeName)
+        {
+            WriteEvent(72, pluginAssemblyPath, pluginTypeName);
+        }
+
+        [Event(73, Keywords = Keywords.All)]
+        public void ProjectCacheBeginBuildStart(string pluginTypeName)
+        {
+            WriteEvent(73, pluginTypeName);
+        }
+
+        [Event(74, Keywords = Keywords.All)]
+        public void ProjectCacheBeginBuildStop(string pluginTypeName)
+        {
+            WriteEvent(74, pluginTypeName);
+        }
+
+        [Event(75, Keywords = Keywords.All)]
+        public void ProjectCacheGetCacheResultStart(string pluginTypeName, string projectPath, string targets)
+        {
+            WriteEvent(75, pluginTypeName, projectPath, targets);
+        }
+
+        [Event(76, Keywords = Keywords.All)]
+        public void ProjectCacheGetCacheResultStop(string pluginTypeName, string projectPath, string targets, string cacheResultType)
+        {
+            WriteEvent(76, pluginTypeName, projectPath, targets, cacheResultType);
+        }
+
+        [Event(77, Keywords = Keywords.All)]
+        public void ProjectCacheEndBuildStart(string pluginTypeName)
+        {
+            WriteEvent(77, pluginTypeName);
+        }
+
+        [Event(78, Keywords = Keywords.All)]
+        public void ProjectCacheEndBuildStop(string pluginTypeName)
+        {
+            WriteEvent(78, pluginTypeName);
+        }
+
+        [Event(79, Keywords = Keywords.All)]
+        public void OutOfProcSdkResolverServiceRequestSdkPathFromMainNodeStart(int submissionId, string sdkName, string solutionPath, string projectPath)
+        {
+            WriteEvent(79, submissionId, sdkName, solutionPath, projectPath);
+        }
+
+        [Event(80, Keywords = Keywords.All)]
+        public void OutOfProcSdkResolverServiceRequestSdkPathFromMainNodeStop(int submissionId, string sdkName, string solutionPath, string projectPath, bool success, bool wasResultCached)
+        {
+            WriteEvent(80, submissionId, sdkName, solutionPath, projectPath, success, wasResultCached);
+        }
+
+        [Event(81, Keywords = Keywords.All)]
+        public void SdkResolverServiceFindResolversManifestsStart()
+        {
+            WriteEvent(81);
+        }
+
+        [Event(82, Keywords = Keywords.All)]
+        public void SdkResolverServiceFindResolversManifestsStop(int resolverManifestCount)
+        {
+            WriteEvent(82, resolverManifestCount);
+        }
+
+        [Event(83, Keywords = Keywords.All)]
+        public void SdkResolverServiceLoadResolversStart()
+        {
+            WriteEvent(83);
+        }
+
+        [Event(84, Keywords = Keywords.All)]
+        public void SdkResolverServiceLoadResolversStop(string manifestName, int resolverCount)
+        {
+            WriteEvent(84, manifestName, resolverCount);
+        }
+
+        [Event(85, Keywords = Keywords.All)]
+        public void CreateLoadedTypeStart(string assemblyName)
+        {
+            WriteEvent(85, assemblyName);
+        }
+
+        [Event(86, Keywords = Keywords.All)]
+        public void CreateLoadedTypeStop(string assemblyName)
+        {
+            WriteEvent(86, assemblyName);
+        }
+
+        [Event(87, Keywords = Keywords.All)]
+        public void LoadAssemblyAndFindTypeStart()
+        {
+            WriteEvent(87);
+        }
+
+        [Event(88, Keywords = Keywords.All)]
+        public void LoadAssemblyAndFindTypeStop(string assemblyPath, int numberOfPublicTypesSearched)
+        {
+            WriteEvent(88, assemblyPath, numberOfPublicTypesSearched);
         }
 
         #endregion

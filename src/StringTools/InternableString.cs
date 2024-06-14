@@ -92,13 +92,13 @@ namespace Microsoft.NET.StringTools
         }
 
         /// <summary>
-        /// The span held by this struct, inline to be able to represent <see cref="ReadOnlySpan{char}"/>. May be empty.
+        /// The span held by this struct, inline to be able to represent <see cref="ReadOnlySpan{T}"/>. May be empty.
         /// </summary>
         private readonly ReadOnlySpan<char> _inlineSpan;
 
-#if NETSTANDARD
+#if FEATURE_FASTSPAN
         /// <summary>
-        /// .NET Core does not keep a reference to the containing object in <see cref="ReadOnlySpan{char}"/>. In particular,
+        /// .NET Core does not keep a reference to the containing object in <see cref="ReadOnlySpan{T}"/>. In particular,
         /// it cannot recover the string if the span represents one. We have to hold the reference separately to be able to
         /// roundtrip String-&gt;InternableString-&gt;String without allocating a new String.
         /// </summary>
@@ -111,7 +111,7 @@ namespace Microsoft.NET.StringTools
         private List<ReadOnlyMemory<char>>? _spans;
 
         /// <summary>
-        /// Constructs a new InternableString wrapping the given <see cref="ReadOnlySpan{char}"/>.
+        /// Constructs a new InternableString wrapping the given <see cref="ReadOnlySpan{T}"/>.
         /// </summary>
         /// <param name="span">The span to wrap.</param>
         /// <remarks>
@@ -122,7 +122,7 @@ namespace Microsoft.NET.StringTools
             _inlineSpan = span;
             _spans = null;
             Length = span.Length;
-#if NETSTANDARD
+#if FEATURE_FASTSPAN
             _inlineSpanString = null;
 #endif
         }
@@ -141,7 +141,7 @@ namespace Microsoft.NET.StringTools
             _inlineSpan = str.AsSpan();
             _spans = null;
             Length = str.Length;
-#if NETSTANDARD
+#if FEATURE_FASTSPAN
             _inlineSpanString = str;
 #endif
         }
@@ -154,7 +154,7 @@ namespace Microsoft.NET.StringTools
             _inlineSpan = default(ReadOnlySpan<char>);
             _spans = stringBuilder.Spans;
             Length = stringBuilder.Length;
-#if NETSTANDARD
+#if FEATURE_FASTSPAN
             _inlineSpanString = null;
 #endif
         }
@@ -220,7 +220,7 @@ namespace Microsoft.NET.StringTools
             // Special case: if we hold just one string, we can directly return it.
             if (_inlineSpan.Length == Length)
             {
-#if NETSTANDARD
+#if FEATURE_FASTSPAN
                 if (_inlineSpanString != null)
                 {
                     return _inlineSpanString;

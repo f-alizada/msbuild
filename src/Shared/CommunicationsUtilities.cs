@@ -11,9 +11,9 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Threading;
 
+using Microsoft.Build.Framework;
 using Microsoft.Build.Shared;
 using System.Reflection;
-using Microsoft.Build.Utilities;
 
 #if !CLR2COMPATIBILITY
 using Microsoft.Build.Shared.Debugging;
@@ -21,6 +21,8 @@ using Microsoft.Build.Shared.Debugging;
 #if !FEATURE_APM
 using System.Threading.Tasks;
 #endif
+
+#nullable disable
 
 namespace Microsoft.Build.Internal
 {
@@ -60,7 +62,17 @@ namespace Microsoft.Build.Internal
         /// <summary>
         /// Building with administrator privileges
         /// </summary>
-        Administrator = 32
+        Administrator = 32,
+
+        /// <summary>
+        /// Using the .NET Core/.NET 5.0+ runtime
+        /// </summary>
+        NET = 64,
+
+        /// <summary>
+        /// ARM64 process
+        /// </summary>
+        Arm64 = 128,
     }
 
     internal readonly struct Handshake
@@ -75,13 +87,17 @@ namespace Microsoft.Build.Internal
 
         internal Handshake(HandshakeOptions nodeType)
         {
-            // We currently use 6 bits of this 32-bit integer. Very old builds will instantly reject any handshake that does not start with F5 or 06; slightly old builds always lead with 00.
+            const int handshakeVersion = (int)CommunicationsUtilities.handshakeVersion;
+
+            // We currently use 7 bits of this 32-bit integer. Very old builds will instantly reject any handshake that does not start with F5 or 06; slightly old builds always lead with 00.
             // This indicates in the first byte that we are a modern build.
-            options = (int)nodeType | (((int)CommunicationsUtilities.handshakeVersion) << 24);
+            options = (int)nodeType | (handshakeVersion << 24);
+            CommunicationsUtilities.Trace("Building handshake for node type {0}, (version {1}): options {2}.", nodeType, handshakeVersion, options);
+
             string handshakeSalt = Environment.GetEnvironmentVariable("MSBUILDNODEHANDSHAKESALT");
             CommunicationsUtilities.Trace("Handshake salt is " + handshakeSalt);
-            string toolsDirectory = (nodeType & HandshakeOptions.X64) == HandshakeOptions.X64 ? BuildEnvironmentHelper.Instance.MSBuildToolsDirectory64 : BuildEnvironmentHelper.Instance.MSBuildToolsDirectory32;
-            CommunicationsUtilities.Trace("Tools directory is " + toolsDirectory);
+            string toolsDirectory = BuildEnvironmentHelper.Instance.MSBuildToolsDirectoryRoot;
+            CommunicationsUtilities.Trace("Tools directory root is " + toolsDirectory);
             salt = CommunicationsUtilities.GetHashCode(handshakeSalt + toolsDirectory);
             Version fileVersion = new Version(FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion);
             fileVersionMajor = fileVersion.Major;
@@ -136,6 +152,11 @@ namespace Microsoft.Build.Internal
         /// Whether to trace communications
         /// </summary>
         private static bool s_trace = Traits.Instance.DebugNodeCommunication;
+
+        /// <summary>
+        /// Lock trace to ensure we are logging in serial fashion.
+        /// </summary>
+        private static readonly object s_traceLock = new();
 
         /// <summary>
         /// Place to dump trace
@@ -213,8 +234,8 @@ namespace Microsoft.Build.Internal
                         // Copy strings out, parsing into pairs and inserting into the table.
                         // The first few environment variable entries start with an '='!
                         // The current working directory of every drive (except for those drives
-                        // you haven't cd'ed into in your DOS window) are stored in the 
-                        // environment block (as =C:=pwd) and the program's exit code is 
+                        // you haven't cd'ed into in your DOS window) are stored in the
+                        // environment block (as =C:=pwd) and the program's exit code is
                         // as well (=ExitCode=00000000)  Skip all that start with =.
                         // Read docs about Environment Blocks on MSDN's CreateProcess page.
 
@@ -228,8 +249,8 @@ namespace Microsoft.Build.Internal
                             int startKey = i;
 
                             // Skip to key
-                            // On some old OS, the environment block can be corrupted. 
-                            // Some lines will not have '=', so we need to check for '\0'. 
+                            // On some old OS, the environment block can be corrupted.
+                            // Some lines will not have '=', so we need to check for '\0'.
                             while (*(pEnvironmentBlock + i) != '=' && *(pEnvironmentBlock + i) != '\0')
                             {
                                 i++;
@@ -306,7 +327,7 @@ namespace Microsoft.Build.Internal
                     }
                 }
 
-                // Then, make sure the old ones have their old values. 
+                // Then, make sure the old ones have their old values.
                 foreach (KeyValuePair<string, string> entry in newEnvironment)
                 {
                     Environment.SetEnvironmentVariable(entry.Key, entry.Value);
@@ -458,7 +479,7 @@ namespace Microsoft.Build.Internal
             int totalBytesRead = 0;
             while (totalBytesRead < bytesToRead)
             {
-                int bytesRead = await stream.ReadAsync(buffer, totalBytesRead, bytesToRead - totalBytesRead);
+                int bytesRead = await stream.ReadAsync(buffer.AsMemory(totalBytesRead, bytesToRead - totalBytesRead), CancellationToken.None);
                 if (bytesRead == 0)
                 {
                     return totalBytesRead;
@@ -472,39 +493,78 @@ namespace Microsoft.Build.Internal
         /// <summary>
         /// Given the appropriate information, return the equivalent HandshakeOptions.
         /// </summary>
-        internal static HandshakeOptions GetHandshakeOptions(bool taskHost, bool is64Bit = false, bool nodeReuse = false, bool lowPriority = false, IDictionary<string, string> taskHostParameters = null)
+        internal static HandshakeOptions GetHandshakeOptions(bool taskHost, string architectureFlagToSet = null, bool nodeReuse = false, bool lowPriority = false, IDictionary<string, string> taskHostParameters = null)
         {
             HandshakeOptions context = taskHost ? HandshakeOptions.TaskHost : HandshakeOptions.None;
 
             int clrVersion = 0;
 
-            // We don't know about the TaskHost. Figure it out.
+            // We don't know about the TaskHost.
             if (taskHost)
             {
-                // Take the current TaskHost context
+                // No parameters given, default to current
                 if (taskHostParameters == null)
                 {
                     clrVersion = typeof(bool).GetTypeInfo().Assembly.GetName().Version.Major;
-                    is64Bit = XMakeAttributes.GetCurrentMSBuildArchitecture().Equals(XMakeAttributes.MSBuildArchitectureValues.x64);
+                    architectureFlagToSet = XMakeAttributes.GetCurrentMSBuildArchitecture();
                 }
-                else
+                else // Figure out flags based on parameters given
                 {
                     ErrorUtilities.VerifyThrow(taskHostParameters.TryGetValue(XMakeAttributes.runtime, out string runtimeVersion), "Should always have an explicit runtime when we call this method.");
                     ErrorUtilities.VerifyThrow(taskHostParameters.TryGetValue(XMakeAttributes.architecture, out string architecture), "Should always have an explicit architecture when we call this method.");
 
-                    clrVersion = runtimeVersion.Equals(XMakeAttributes.MSBuildRuntimeValues.clr4, StringComparison.OrdinalIgnoreCase) ? 4 : 2;
-                    is64Bit = architecture.Equals(XMakeAttributes.MSBuildArchitectureValues.x64);
+                    if (runtimeVersion.Equals(XMakeAttributes.MSBuildRuntimeValues.clr2, StringComparison.OrdinalIgnoreCase))
+                    {
+                        clrVersion = 2;
+                    }
+                    else if (runtimeVersion.Equals(XMakeAttributes.MSBuildRuntimeValues.clr4, StringComparison.OrdinalIgnoreCase))
+                    {
+                        clrVersion = 4;
+                    }
+                    else if (runtimeVersion.Equals(XMakeAttributes.MSBuildRuntimeValues.net, StringComparison.OrdinalIgnoreCase))
+                    {
+                        clrVersion = 5;
+                    }
+                    else
+                    {
+                        ErrorUtilities.ThrowInternalErrorUnreachable();
+                    }
+
+                    architectureFlagToSet = architecture;
                 }
             }
 
-            if (is64Bit)
+            if (!string.IsNullOrEmpty(architectureFlagToSet))
             {
-                context |= HandshakeOptions.X64;
+                if (architectureFlagToSet.Equals(XMakeAttributes.MSBuildArchitectureValues.x64, StringComparison.OrdinalIgnoreCase))
+                {
+                    context |= HandshakeOptions.X64;
+                }
+                else if (architectureFlagToSet.Equals(XMakeAttributes.MSBuildArchitectureValues.arm64, StringComparison.OrdinalIgnoreCase))
+                {
+                    context |= HandshakeOptions.Arm64;
+                }
             }
-            if (clrVersion == 2)
+
+            switch (clrVersion)
             {
-                context |= HandshakeOptions.CLR2;
+                case 0:
+                    // Not a taskhost, runtime must match
+                case 4:
+                    // Default for MSBuild running on .NET Framework 4,
+                    // not represented in handshake
+                    break;
+                case 2:
+                    context |= HandshakeOptions.CLR2;
+                    break;
+                case >= 5:
+                    context |= HandshakeOptions.NET;
+                    break;
+                default:
+                    ErrorUtilities.ThrowInternalErrorUnreachable();
+                    break;
             }
+
             if (nodeReuse)
             {
                 context |= HandshakeOptions.NodeReuse;
@@ -561,9 +621,9 @@ namespace Microsoft.Build.Internal
         {
             if (s_trace)
             {
-                if (s_debugDumpPath == null)
+                lock (s_traceLock)
                 {
-                    s_debugDumpPath =
+                    s_debugDumpPath ??=
 #if CLR2COMPATIBILITY
                         Environment.GetEnvironmentVariable("MSBUILDDEBUGPATH");
 #else
@@ -580,30 +640,31 @@ namespace Microsoft.Build.Internal
                     {
                         Directory.CreateDirectory(s_debugDumpPath);
                     }
-                }
 
-                try
-                {
-                    string fileName = @"MSBuild_CommTrace_PID_{0}";
-                    if (nodeId != -1)
+                    try
                     {
-                        fileName += "_node_" + nodeId;
+                        string fileName = @"MSBuild_CommTrace_PID_{0}";
+                        if (nodeId != -1)
+                        {
+                            fileName += "_node_" + nodeId;
+                        }
+
+                        fileName += ".txt";
+
+                        using (StreamWriter file = FileUtilities.OpenWrite(
+                            String.Format(CultureInfo.CurrentCulture, Path.Combine(s_debugDumpPath, fileName), Process.GetCurrentProcess().Id, nodeId), append: true))
+                        {
+                            string message = String.Format(CultureInfo.CurrentCulture, format, args);
+                            long now = DateTime.UtcNow.Ticks;
+                            float millisecondsSinceLastLog = (float)(now - s_lastLoggedTicks) / 10000L;
+                            s_lastLoggedTicks = now;
+                            file.WriteLine("{0} (TID {1}) {2,15} +{3,10}ms: {4}", Thread.CurrentThread.Name, Thread.CurrentThread.ManagedThreadId, now, millisecondsSinceLastLog, message);
+                        }
                     }
-
-                    fileName += ".txt";
-
-                    using (StreamWriter file = FileUtilities.OpenWrite(String.Format(CultureInfo.CurrentCulture, Path.Combine(s_debugDumpPath, fileName), Process.GetCurrentProcess().Id, nodeId), append: true))
+                    catch (IOException)
                     {
-                        string message = String.Format(CultureInfo.CurrentCulture, format, args);
-                        long now = DateTime.UtcNow.Ticks;
-                        float millisecondsSinceLastLog = (float)(now - s_lastLoggedTicks) / 10000L;
-                        s_lastLoggedTicks = now;
-                        file.WriteLine("{0} (TID {1}) {2,15} +{3,10}ms: {4}", Thread.CurrentThread.Name, Thread.CurrentThread.ManagedThreadId, now, millisecondsSinceLastLog, message);
+                        // Ignore
                     }
-                }
-                catch (IOException)
-                {
-                    // Ignore
                 }
             }
         }

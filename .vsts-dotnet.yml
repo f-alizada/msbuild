@@ -22,7 +22,7 @@ variables:
     value: ''
   - name: SourceBranch
     value: $(IbcSourceBranchName)
-  # If we're not on a vs* branch, use main as our optprof collection branch
+  # If we're not on a vs* branch, use  as our optprof collection branch
   - ${{ if not(startsWith(variables['Build.SourceBranch'], 'refs/heads/vs')) }}:
     - name: SourceBranch
       value: main
@@ -36,6 +36,11 @@ variables:
     value: .NETCore
   - name: _DotNetValidationArtifactsCategory
     value: .NETCoreValidation
+  - name: EnableReleaseOneLocBuild
+    value: false
+  - name: Codeql.Enabled
+    value: true
+  - group: DotNet-MSBuild-SDLValidation-Params
 
 resources:
   repositories:
@@ -61,13 +66,29 @@ extends:
       displayName: Build
 
       jobs:
+      # The localization setup for release/ branches. Note difference in LclPackageId. main branch is handled separately below.
+      # Used for vs17.2, vs17.4, vs17.6 etc. branches only.
+      # When the branch is setup for localization (the localization ticket needs to be created - https://aka.ms/ceChangeLocConfig, requesting change from one release branch to another),
+      #  set 'EnableReleaseOneLocBuild' to true.
+      - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/vs') }}:
+        - template: /eng/common/templates-official/job/onelocbuild.yml@self
+          parameters:
+            MirrorRepo: 'msbuild'
+            LclSource: lclFilesfromPackage
+            LclPackageId: 'LCL-JUNO-PROD-MSBUILDREL'
+            MirrorBranch: ${{ replace(variables['Build.SourceBranch'], 'refs/heads/', '') }}
+            JobNameSuffix: '_release'
+            condition: ${{ variables.EnableReleaseOneLocBuild }}
+      # The localization setup for main branch. Note difference in package ID. Should not be used with release/ branches.
       - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
         - template: /eng/common/templates-official/job/onelocbuild.yml@self
           parameters:
+            MirrorRepo: 'msbuild'
             LclSource: lclFilesfromPackage
             LclPackageId: 'LCL-JUNO-PROD-MSBUILD'
-            MirrorRepo: 'msbuild'
-            MirrorBranch: 'main' # should match condition above
+            MirrorBranch: 'main'
+            JobNameSuffix: '_main'
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
 
       - job: Windows_NT
         pool:
@@ -86,7 +107,7 @@ extends:
         - name: VisualStudio.MajorVersion
           value: 17
         - name: VisualStudio.ChannelName
-          value: 'int.d17.0'
+          value: 'int.d17.3'
         - name: VisualStudio.DropName
           value: Products/$(System.TeamProject)/$(Build.Repository.Name)/$(Build.SourceBranchName)/$(Build.BuildNumber)
 
@@ -109,7 +130,7 @@ extends:
             zipSources: false
           condition: and(succeeded(), in(variables['SignType'], 'test', 'real'))
 
-        # OptProf is not needed because the 17.0 branch will not be serviced in VS.
+        # OptProf is not needed because 17.3 will not be serviced in VS.
         # - task: MicroBuildOptProfPlugin@6
         #   inputs:
         #     ProfilingInputsDropName: '$(VisualStudio.DropName)'
@@ -148,7 +169,7 @@ extends:
         # Required by Microsoft policy
         - template: eng\common\templates-official\steps\generate-sbom.yml@self
 
-        # OptProf is not needed because the 17.0 branch will not be serviced in VS.
+        # OptProf is not needed because 17.3 will not be serviced in VS.
         # Publish OptProf configuration files
         # - task: 1ES.PublishArtifactsDrop@1
         #   inputs:
@@ -265,6 +286,13 @@ extends:
         - task: ms-vseng.MicroBuildTasks.521a94ea-9e68-468a-8167-6dcf361ea776.MicroBuildCleanup@1
           displayName: Execute cleanup tasks
           condition: succeededOrFailed()
+
+        - template: /eng/common/templates-official/steps/component-governance.yml@self
+          parameters:
+            ${{ if or(startsWith(variables['Build.SourceBranch'], 'refs/heads/vs'), eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}:
+              disableComponentGovernance: false
+            ${{ else }}:
+              disableComponentGovernance: true
 
       - template: /eng/common/templates-official/jobs/source-build.yml@self
         parameters:
